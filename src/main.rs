@@ -3,7 +3,14 @@
 // ip_sniffer.exe -j 100 192.168.1.1 (100 threads)
 // ip_sniffer.exe 192.168.1.1 (use default n threads)
 
-use std::{env, fmt::Debug, net::IpAddr, str::FromStr};
+use core::num;
+use std::io::{self, Write};
+use std::net::{IpAddr, TcpStream};
+use std::sync::mpsc::{channel, Sender};
+use std::thread;
+use std::{env, fmt::Debug, process, str::FromStr};
+
+const MAX_PORT: u16 = 65535;
 
 struct Args {
     flag: String,
@@ -61,8 +68,43 @@ impl Args {
     }
 }
 
+fn scan(tx: Sender<u16>, start_port: u16, ip: IpAddr, num_threads: u16) {
+    let mut port = start_port + 1;
+    loop {
+        match TcpStream::connect((ip, port)) {
+            Ok(_) => {
+                print!(".");
+                io::stdout().flush().unwrap();
+                tx.send(port).unwrap()
+            }
+            Err(_) => {}
+        }
+
+        if (MAX_PORT - port) <= num_threads {
+            break;
+        }
+        port += num_threads;
+    }
+}
+
+fn snif_around(args: Args) {
+    let num_threads = args.threads;
+    let (tx, rx) = channel::<u16>();
+    for i in 0..num_threads {
+        let tx = tx.clone();
+        thread::spawn(move || scan(tx, i, args.ip.clone(), num_threads));
+    }
+}
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let args = Args::new(args);
+    let args = Args::new(args).unwrap_or_else(|err| {
+        if err.contains("help") {
+            process::exit(0)
+        } else {
+            eprintln!("Probelm parsing arguments:: {}", err);
+            process::exit(0)
+        }
+    });
     println!("Arguments:: {:?}", args);
+    snif_around(args);
 }
